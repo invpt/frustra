@@ -1,17 +1,16 @@
-{ pkgs ? import <nixpkgs> {}
-, lib ? pkgs.lib
-}:
+{ pkgs ? import <nixpkgs> { } }:
 
-pkgs.stdenv.mkDerivation rec {
-  name = "okfm";
+with pkgs;
 
-  buildInputs = with pkgs; [
-    rust-analyzer
-    cargo
-    wayland
-    libxkbcommon
-    libGL
+mkShell rec {
+  nativeBuildInputs = [
+    pkg-config
   ];
-
-  LD_LIBRARY_PATH = "${lib.makeLibraryPath buildInputs}";
+  buildInputs = [
+    cargo rust-analyzer
+    udev alsa-lib vulkan-loader
+    xorg.libX11 xorg.libXcursor xorg.libXi xorg.libXrandr # To use the x11 feature
+    libxkbcommon wayland # To use the wayland feature
+  ];
+  LD_LIBRARY_PATH = lib.makeLibraryPath buildInputs;
 }
