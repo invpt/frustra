@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, mem::size_of, sync::Arc};
 
 use nalgebra::{Matrix4, Point3, Vector3, Vector4};
+use rand::Rng;
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, IndexBuffer, Subbuffer},
     command_buffer::{
@@ -60,6 +61,8 @@ use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 pub struct VertexContents {
     #[format(R32G32B32_SFLOAT)]
     pub position: [f32; 3],
+    #[format(R32_SFLOAT)]
+    pub light: f32,
 }
 
 #[derive(BufferContents, Vertex)]
@@ -101,6 +104,7 @@ impl Renderer {
         display: &impl HasRawDisplayHandle,
         window: Arc<impl HasRawWindowHandle + HasRawDisplayHandle + std::any::Any + Send + Sync>,
         inner_size: [u32; 2],
+        object: &crate::world::Object<bool>,
     ) -> Result<Renderer, Box<dyn std::error::Error>> {
         let library = VulkanLibrary::new().unwrap();
         // The first step of any Vulkan program is to create an instance.
@@ -247,11 +251,19 @@ impl Renderer {
                 .unwrap();
 
             // Choosing the internal format that the images will have.
-            let image_format = device
+            let image_formats = device
                 .physical_device()
                 .surface_formats(&surface, Default::default())
-                .unwrap()[0]
-                .0;
+                .unwrap();
+            let mut image_format = image_formats[0].0;
+            dbg!(&image_formats);
+            for (other_format, _color_space) in image_formats {
+                if other_format == Format::A2R10G10B10_UNORM_PACK32 {
+                    image_format = other_format;
+                }
+            }
+
+            println!("Using image format {image_format:?}");
 
             Swapchain::new(
                 device.clone(),
@@ -272,95 +284,25 @@ impl Renderer {
 
         let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
 
-        let obj = crate::world::Object::new(512, 512, 512, |x, y, z| z % 2 == 0 && (x as isize - z as isize).abs() < 3 && (z == 0 || y % z == 0));
-        let (iverts, itris) = obj.tess();
-
-        let mut vertices = Vec::with_capacity(iverts.len());
-        for (ix, iy, iz) in iverts {
-            vertices.push(VertexContents {
-                position: [ix as f32, iy as f32, iz as f32],
-            });
-        }
-        let mut indices = Vec::with_capacity(itris.len() * 3);
-        for itri in itris {
-            for vidx in itri {
-                indices.push(vidx as u32);
-            }
-        }
-
-        let vertex_buffer = Buffer::from_iter(
-            memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::VERTEX_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            vertices,
-        )
-        .unwrap();
-
-        let index_buffer = IndexBuffer::U32(
-            Buffer::from_iter(
-                memory_allocator.clone(),
-                BufferCreateInfo {
-                    usage: BufferUsage::INDEX_BUFFER,
-                    ..Default::default()
-                },
-                AllocationCreateInfo {
-                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                        | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                    ..Default::default()
-                },
-                indices,
-            )
-            .unwrap(),
-        );
+        let (vertex_buffer, index_buffer) = Self::build_object_buffers(&memory_allocator, object);
 
         mod vs {
             vulkano_shaders::shader! {
                 ty: "vertex",
-                src: r"
-                #version 450
-
-                layout(push_constant) uniform UniformBufferObject {
-                    mat4 world_to_clip;
-                };
-
-                layout(location = 0) in vec3 position;
-                layout(location = 1) out float z;
-
-                void main() {
-                    gl_Position = world_to_clip * vec4(position, 1.0);
-                    z = gl_Position.z / gl_Position.w;
-                }
-            ",
+                path: "src/renderer/shaders/vert.glsl",
             }
         }
 
         mod fs {
             vulkano_shaders::shader! {
                 ty: "fragment",
-                src: r"
-                #version 450
-
-                layout(location = 1) in float z;
-                layout(location = 0) out vec4 f_color;
-
-                void main() {
-                    f_color = vec4(0.0, 2.0 * z, 0.0, 1.0);
-                }
-            ",
+                path: "src/renderer/shaders/frag.glsl",
             }
         }
 
         let render_pass = vulkano::single_pass_renderpass!(
             device.clone(),
             attachments: {
-                // `color` is a custom name we give to the first and only attachment.
                 color: {
                     format: swapchain.image_format(),
                     samples: 1,
@@ -426,16 +368,10 @@ impl Renderer {
         })
     }
 
-    fn view_matrix((x, y, z): (f32, f32, f32), camera_rotation: Vector3<f32>) -> Matrix4<f32> {
-        Matrix4::new_rotation(Vector3::new(camera_rotation.x, 0.0, 0.0))
-            * Matrix4::new_rotation(Vector3::new(0.0, camera_rotation.y, 0.0))
-            * Matrix4::new_translation(&-Vector3::new(x, y, z))
-    }
-
-    fn projection_matrix(size: [u32; 2]) -> Matrix4<f32> {
+    fn perspective(size: [u32; 2]) -> Matrix4<f32> {
         let aspect = size[0] as f32 / size[1] as f32;
         let fovy = 90.0f32.to_radians();
-        let near = 1.0;
+        let near = 0.01;
 
         let focal_length = 1.0 / (fovy / 2.0).tan();
 
@@ -450,12 +386,63 @@ impl Renderer {
         projection_matrix
     }
 
-    pub fn draw(
-        &mut self,
-        image_extent: [u32; 2],
-        camera_pos: (f32, f32, f32),
-        camera_rotation: Vector3<f32>,
-    ) {
+    fn build_object_buffers(
+        memory_allocator: &Arc<StandardMemoryAllocator>,
+        obj: &crate::world::Object<bool>,
+    ) -> (Subbuffer<[VertexContents]>, IndexBuffer) {
+        let (iverts, itris) = obj.tess();
+
+        let mut vertices = Vec::with_capacity(iverts.len());
+        for (ix, iy, iz) in iverts {
+            let pos_vec = Vector3::new(ix as f32, iy as f32, iz as f32);
+            vertices.push(VertexContents {
+                position: [ix as f32, iy as f32, iz as f32],
+                light: 1.0 / (0.125 * (pos_vec - Vector3::new(0.5, 0.5, 0.5)).norm() + 1.0).powi(2)//5.0 / (pos_vec.norm() + 1.0).powi(2),//((48.0 - pos_vec.norm().min(48.0)) / 48.0).powi(2),
+            });
+        }
+        let mut indices = Vec::with_capacity(itris.len() * 3);
+        for itri in itris {
+            for vidx in itri {
+                indices.push(vidx as u32);
+            }
+        }
+
+        let vertex_buffer = Buffer::from_iter(
+            memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::VERTEX_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            vertices,
+        )
+        .unwrap();
+
+        let index_buffer = IndexBuffer::U32(
+            Buffer::from_iter(
+                memory_allocator.clone(),
+                BufferCreateInfo {
+                    usage: BufferUsage::INDEX_BUFFER,
+                    ..Default::default()
+                },
+                AllocationCreateInfo {
+                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                        | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                    ..Default::default()
+                },
+                indices,
+            )
+            .unwrap(),
+        );
+
+        (vertex_buffer, index_buffer)
+    }
+
+    pub fn draw(&mut self, image_extent: [u32; 2], view: Matrix4<f32>) {
         // It is important to call this function from time to time, otherwise resources
         // will keep accumulating and you will eventually reach an out of memory error.
         // Calling this function polls various fences in order to determine what the GPU
@@ -531,7 +518,7 @@ impl Renderer {
         builder
             .begin_render_pass(
                 RenderPassBeginInfo {
-                    clear_values: vec![Some([0.0, 0.0, 1.0, 1.0].into()), Some(1f32.into())],
+                    clear_values: vec![Some([0.0, 0.0, 0.0, 1.0].into()), Some(1f32.into())],
                     ..RenderPassBeginInfo::framebuffer(
                         self.framebuffers[image_index as usize].clone(),
                     )
@@ -539,11 +526,6 @@ impl Renderer {
                 Default::default(),
             )
             .unwrap()
-            /*// We are now inside the first subpass of the render pass.
-            //
-            // TODO: Document state setting and how it affects subsequent draw commands.
-            .set_viewport(0, [self.viewport.clone()].into_iter().collect())
-            .unwrap()*/
             .bind_pipeline_graphics(self.pipeline.clone())
             .unwrap()
             .bind_vertex_buffers(0, self.vertex_buffer.clone())
@@ -554,16 +536,12 @@ impl Renderer {
                 self.pipeline.layout().clone(),
                 0,
                 UniformBufferContents {
-                    projection_matrix: (Self::projection_matrix(image_extent)
-                        * Self::view_matrix(camera_pos, camera_rotation))
-                    .into(),
+                    projection_matrix: (Self::perspective(image_extent) * view).into(),
                 },
             )
             .unwrap()
             .draw_indexed(self.index_buffer.len() as u32, 1, 0, 0, 0)
             .unwrap()
-            // We leave the render pass. Note that if we had multiple subpasses we could
-            // have called `next_subpass` to jump to the next subpass.
             .end_render_pass(Default::default())
             .unwrap();
 
@@ -577,10 +555,6 @@ impl Renderer {
             .join(acquire_future)
             .then_execute(self.queue.clone(), command_buffer)
             .unwrap()
-            // The color output is now expected to contain our triangle. But in order to
-            // show it on the screen, we have to *present* the image by calling
-            // `then_swapchain_present`.
-            //
             // This function does not actually present the image immediately. Instead it
             // submits a present command at the end of the queue. This means that it will
             // only be presented once the GPU has finished executing the command buffer
@@ -652,10 +626,6 @@ impl Renderer {
             })
             .collect::<Vec<_>>();
 
-        // In the triangle example we use a dynamic viewport, as its a simple example. However in the
-        // teapot example, we recreate the pipelines with a hardcoded viewport instead. This allows the
-        // driver to optimize things, at the cost of slower window resizes.
-        // https://computergraphics.stackexchange.com/questions/5742/vulkan-best-way-of-updating-pipeline-viewport
         let pipeline = {
             let vertex_input_state = VertexContents::per_vertex()
                 .definition(&vs.info().input_interface)

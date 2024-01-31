@@ -17,7 +17,7 @@
 // vertex or a shader is.
 
 use nalgebra::{Isometry3, Matrix4, Quaternion, Rotation3, Vector3};
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, sync::Arc, time::Instant};
 use winit::{
     event::{DeviceEvent, ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
@@ -60,14 +60,22 @@ fn main() {
         .unwrap();
     window.set_cursor_visible(false);
 
-    let mut renderer =
-        renderer::Renderer::new(&event_loop, window.clone(), window.inner_size().into()).unwrap();
+    let object = crate::world::Object::new(48, 48, 48, |x, y, z| true);
+    let mut renderer = renderer::Renderer::new(
+        &event_loop,
+        window.clone(),
+        window.inner_size().into(),
+        &object,
+    )
+    .unwrap();
 
     let mut pressed = HashSet::<VirtualKeyCode>::new();
 
+    let mut t = Instant::now();
+
     let sensitivity = 0.005;
 
-    let mut cam_pos = (0.0, 0.0, 0.0);
+    let mut cam_pos = (0.0, 5.5, 0.0);
     let mut rot_y = 0.0f32;
     let mut rot_x = 0.0f32;
     event_loop.run(move |event, _, control_flow| {
@@ -117,6 +125,10 @@ fn main() {
                 rot_x += sensitivity * delta.1 as f32;
             }
             Event::RedrawEventsCleared => {
+                let now = Instant::now();
+                let dt = now.duration_since(t).as_secs_f32();
+                t = now;
+
                 let mut move_dir = Vector3::new(0.0, 0.0, 0.0);
                 if pressed.contains(&VirtualKeyCode::W) {
                     move_dir.z -= 1.0;
@@ -140,10 +152,9 @@ fn main() {
                     move_dir.normalize_mut();
                 }
 
-                move_dir = Rotation3::from_scaled_axis(Vector3::new(0.0, -rot_y, 0.0))
-                    * move_dir;
+                move_dir = Rotation3::from_scaled_axis(Vector3::new(0.0, -rot_y, 0.0)) * move_dir;
 
-                let move_speed = 1.0;
+                let move_speed = 12.951 * dt;
 
                 cam_pos.0 += move_speed * move_dir.x;
                 cam_pos.1 += move_speed * move_dir.y;
@@ -157,7 +168,12 @@ fn main() {
                     return;
                 }
 
-                renderer.draw(image_extent, cam_pos, Vector3::new(rot_x, rot_y, 0.0));
+                renderer.draw(
+                    image_extent,
+                    Matrix4::new_rotation(Vector3::new(rot_x, 0.0, 0.0))
+                        * Matrix4::new_rotation(Vector3::new(0.0, rot_y, 0.0))
+                        * Matrix4::new_translation(&-Vector3::new(cam_pos.0, cam_pos.1, cam_pos.2)),
+                );
             }
             _ => (),
         }

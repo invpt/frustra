@@ -76,6 +76,6 @@ fn tess_face(
         }
     }
 
-    tris.push([vertex_ids[0], vertex_ids[1], vertex_ids[2]]);
+    tris.push([vertex_ids[2], vertex_ids[0], vertex_ids[1]]);
     tris.push([vertex_ids[2], vertex_ids[1], vertex_ids[3]]);
 }
