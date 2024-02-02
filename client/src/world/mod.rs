@@ -1,7 +1,9 @@
-mod tess;
+use nalgebra::Vector3;
+
+use crate::math::CubeFace;
 
 pub struct Object<T> {
-    size: Size3<usize>,
+    size: Size3,
     data: Box<[T]>,
 }
 
@@ -24,7 +26,7 @@ impl<T> Object<T> {
         Self::positions_for_size(self.size)
     }
 
-    fn positions_for_size(size: Size3<usize>) -> impl Iterator<Item = (usize, usize, usize)> {
+    fn positions_for_size(size: Size3) -> impl Iterator<Item = (usize, usize, usize)> {
         (0..size.y)
             .flat_map(move |y| (0..size.x).flat_map(move |x| (0..size.z).map(move |z| (x, y, z))))
     }
@@ -34,14 +36,14 @@ impl<T> Object<T> {
             .map(|(x, y, z)| (x, y, z, self.get(x, y, z).unwrap()))
     }
 
-    pub fn adjacent(&self, x: usize, y: usize, z: usize, direction: Direction) -> Option<&T> {
+    pub fn adjacent(&self, x: usize, y: usize, z: usize, direction: CubeFace) -> Option<&T> {
         let (x, y, z) = match direction {
-            Direction::Up => (Some(x), y.checked_add(1), Some(z)),
-            Direction::Down => (Some(x), y.checked_sub(1), Some(z)),
-            Direction::Left => (x.checked_sub(1), Some(y), Some(z)),
-            Direction::Right => (x.checked_add(1), Some(y), Some(z)),
-            Direction::Backwards => (Some(x), Some(y), z.checked_add(1)),
-            Direction::Forwards => (Some(x), Some(y), z.checked_sub(1)),
+            CubeFace::Up => (Some(x), y.checked_add(1), Some(z)),
+            CubeFace::Down => (Some(x), y.checked_sub(1), Some(z)),
+            CubeFace::Left => (x.checked_sub(1), Some(y), Some(z)),
+            CubeFace::Right => (x.checked_add(1), Some(y), Some(z)),
+            CubeFace::Backwards => (Some(x), Some(y), z.checked_add(1)),
+            CubeFace::Forwards => (Some(x), Some(y), z.checked_sub(1)),
         };
 
         if let (Some(x), Some(y), Some(z)) = (x, y, z) {
@@ -68,41 +70,18 @@ impl<T> Object<T> {
     }
 }
 
-impl Object<bool> {
-    pub fn tess(&self) -> (Vec<(usize, usize, usize)>, Vec<[usize; 3]>) {
-        tess::tess(self)
-    }
-}
-
-pub struct Pos3<T> {
-    pub x: T,
-    pub y: T,
-    pub z: T,
+pub struct Pos3 {
+    pub x: usize,
+    pub y: usize,
+    pub z: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Size3<T> {
+pub struct Size3 {
     /// Sideways (x) size.
-    pub x: T,
+    pub x: usize,
     /// Vertical (y) size.
-    pub y: T,
+    pub y: usize,
     /// Forwards (z) size.
-    pub z: T,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Direction {
-    Up,
-    Down,
-    Left,
-    Right,
-    Forwards,
-    Backwards,
-}
-
-impl Direction {
-    pub fn directions() -> impl Iterator<Item = Direction> {
-        use Direction::*;
-        [Up, Down, Left, Right, Forwards, Backwards].into_iter()
-    }
+    pub z: usize,
 }

@@ -17,6 +17,7 @@
 // vertex or a shader is.
 
 use nalgebra::{Isometry3, Matrix4, Quaternion, Rotation3, Vector3};
+use rand::Rng;
 use std::{collections::HashSet, sync::Arc, time::Instant};
 use winit::{
     event::{DeviceEvent, ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
@@ -24,6 +25,7 @@ use winit::{
     window::{CursorGrabMode, Fullscreen, WindowBuilder},
 };
 
+pub(crate) mod math;
 mod renderer;
 pub(crate) mod world;
 
@@ -60,7 +62,31 @@ fn main() {
         .unwrap();
     window.set_cursor_visible(false);
 
-    let object = crate::world::Object::new(48, 48, 48, |x, y, z| true);
+    let mut object = crate::world::Object::new(32, 32, 32, |x, y, z| {
+        if y == 10 {
+            return true;
+        }
+        let (x, y, z) = (x as f32, y as f32, z as f32);
+        let (x, y, z) = (x - 16.0, y - 16.0, z - 16.0);
+        (x * x + y * y + z * z) < 8.0f32.powi(2)
+    });
+    /*let mut object = crate::world::Object::new(12, 12, 12, |_, _, _| false);
+    let blocks = [(0, 0, 0), (0, 1, 0)];
+    for (x, y, z) in blocks {
+        *object.get_mut(x, y, z).unwrap() = true;
+    }*/
+    /*let mut object = crate::world::Object::new(48, 48, 48, |_, _, _| false);
+    renderer::dda::dda(Vector3::new(8.5, 0.5, 47.5), Vector3::new(-0.57735026,
+        0.57735026,
+        -0.57735026,), |x, y, z| {
+            let (Ok(x), Ok(y), Ok(z)) = (x.try_into(), y.try_into(), z.try_into()) else { return renderer::dda::TraversalAction::Stop };
+            if let Some(b) = object.get_mut(x, y, z) {
+                *b = true;
+                renderer::dda::TraversalAction::Continue
+            } else {
+                renderer::dda::TraversalAction::Stop
+            }
+        });*/
     let mut renderer = renderer::Renderer::new(
         &event_loop,
         window.clone(),
@@ -129,6 +155,13 @@ fn main() {
                 let dt = now.duration_since(t).as_secs_f32();
                 t = now;
 
+                // Do not draw the frame when the screen size is zero. On Windows, this can
+                // occur when minimizing the application.
+                let image_extent: [u32; 2] = window.inner_size().into();
+                if image_extent.contains(&0) {
+                    return;
+                }
+
                 let mut move_dir = Vector3::new(0.0, 0.0, 0.0);
                 if pressed.contains(&VirtualKeyCode::W) {
                     move_dir.z -= 1.0;
@@ -159,14 +192,6 @@ fn main() {
                 cam_pos.0 += move_speed * move_dir.x;
                 cam_pos.1 += move_speed * move_dir.y;
                 cam_pos.2 += move_speed * move_dir.z;
-
-                // Do not draw the frame when the screen size is zero. On Windows, this can
-                // occur when minimizing the application.
-                let image_extent: [u32; 2] = window.inner_size().into();
-
-                if image_extent.contains(&0) {
-                    return;
-                }
 
                 renderer.draw(
                     image_extent,

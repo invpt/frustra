@@ -1,7 +1,6 @@
 use std::{collections::BTreeMap, mem::size_of, sync::Arc};
 
-use nalgebra::{Matrix4, Point3, Vector3, Vector4};
-use rand::Rng;
+use nalgebra::Matrix4;
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, IndexBuffer, Subbuffer},
     command_buffer::{
@@ -53,17 +52,8 @@ use vulkano::{
 
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
-// We now create a buffer that will store the shape of our triangle. We use `#[repr(C)]` here
-// to force rustc to use a defined layout for our data, as the default representation has *no
-// guarantees*.
-#[derive(BufferContents, Vertex)]
-#[repr(C)]
-pub struct VertexContents {
-    #[format(R32G32B32_SFLOAT)]
-    pub position: [f32; 3],
-    #[format(R32_SFLOAT)]
-    pub light: f32,
-}
+mod lighting;
+mod mesh;
 
 #[derive(BufferContents, Vertex)]
 #[repr(C)]
@@ -85,10 +75,11 @@ pub struct Renderer {
     swapchain: Arc<Swapchain>,
     images: Vec<Arc<Image>>,
     memory_allocator: Arc<StandardMemoryAllocator>,
-    vertex_buffer: Subbuffer<[VertexContents]>,
-    index_buffer: IndexBuffer,
+    vertex_buffer: Subbuffer<[mesh::VertexBufferItem]>,
+    face_buffer: Subbuffer<[lighting::LightMapEntry]>,
     render_pass: Arc<RenderPass>,
     pipeline: Arc<GraphicsPipeline>,
+    descriptor_set: Arc<PersistentDescriptorSet>,
     framebuffers: Vec<Arc<Framebuffer>>,
     command_buffer_allocator: StandardCommandBufferAllocator,
 
@@ -283,8 +274,12 @@ impl Renderer {
         };
 
         let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
-
-        let (vertex_buffer, index_buffer) = Self::build_object_buffers(&memory_allocator, object);
+        let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(
+            device.clone(),
+            StandardDescriptorSetAllocatorCreateInfo {
+                ..Default::default()
+            },
+        ));
 
         mod vs {
             vulkano_shaders::shader! {
@@ -340,6 +335,16 @@ impl Renderer {
             render_pass.clone(),
         );
 
+        let (vertex_buffer, face_buffer) = Self::build_object(&memory_allocator, object);
+
+        let descriptor_set = PersistentDescriptorSet::new(
+            &descriptor_set_allocator,
+            pipeline.layout().set_layouts()[0].clone(),
+            [WriteDescriptorSet::buffer(0, face_buffer.clone())],
+            [],
+        )
+        .unwrap();
+
         let command_buffer_allocator =
             StandardCommandBufferAllocator::new(device.clone(), Default::default());
 
@@ -358,7 +363,8 @@ impl Renderer {
             images,
             memory_allocator,
             vertex_buffer,
-            index_buffer,
+            face_buffer,
+            descriptor_set,
             render_pass,
             pipeline,
             framebuffers,
@@ -371,7 +377,7 @@ impl Renderer {
     fn perspective(size: [u32; 2]) -> Matrix4<f32> {
         let aspect = size[0] as f32 / size[1] as f32;
         let fovy = 90.0f32.to_radians();
-        let near = 0.01;
+        let near = 0.1;
 
         let focal_length = 1.0 / (fovy / 2.0).tan();
 
@@ -386,26 +392,26 @@ impl Renderer {
         projection_matrix
     }
 
-    fn build_object_buffers(
+    fn build_object(
         memory_allocator: &Arc<StandardMemoryAllocator>,
-        obj: &crate::world::Object<bool>,
-    ) -> (Subbuffer<[VertexContents]>, IndexBuffer) {
-        let (iverts, itris) = obj.tess();
-
-        let mut vertices = Vec::with_capacity(iverts.len());
-        for (ix, iy, iz) in iverts {
-            let pos_vec = Vector3::new(ix as f32, iy as f32, iz as f32);
-            vertices.push(VertexContents {
-                position: [ix as f32, iy as f32, iz as f32],
-                light: 1.0 / (0.125 * (pos_vec - Vector3::new(0.5, 0.5, 0.5)).norm() + 1.0).powi(2)//5.0 / (pos_vec.norm() + 1.0).powi(2),//((48.0 - pos_vec.norm().min(48.0)) / 48.0).powi(2),
-            });
-        }
-        let mut indices = Vec::with_capacity(itris.len() * 3);
-        for itri in itris {
-            for vidx in itri {
-                indices.push(vidx as u32);
-            }
-        }
+        object: &crate::world::Object<bool>,
+    ) -> (
+        Subbuffer<[mesh::VertexBufferItem]>,
+        Subbuffer<[lighting::LightMapEntry]>,
+    ) {
+        let mut faces = Vec::new();
+        let vertices = mesh::mesh(
+            object,
+            |_, _, _, _, _| {},
+            |x, y, z, face, vertices| {
+                for vertex in vertices {
+                    vertex.set_data(faces.len() as u32);
+                }
+                let entry = lighting::light_face(x as isize, y as isize, z as isize, face, object);
+                faces.push(entry);
+            },
+            |_, _, _, _| {},
+        );
 
         let vertex_buffer = Buffer::from_iter(
             memory_allocator.clone(),
@@ -422,24 +428,22 @@ impl Renderer {
         )
         .unwrap();
 
-        let index_buffer = IndexBuffer::U32(
-            Buffer::from_iter(
-                memory_allocator.clone(),
-                BufferCreateInfo {
-                    usage: BufferUsage::INDEX_BUFFER,
-                    ..Default::default()
-                },
-                AllocationCreateInfo {
-                    memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                        | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                    ..Default::default()
-                },
-                indices,
-            )
-            .unwrap(),
-        );
+        let face_buffer = Buffer::from_iter(
+            memory_allocator.clone(),
+            BufferCreateInfo {
+                usage: BufferUsage::STORAGE_BUFFER,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            faces,
+        )
+        .unwrap();
 
-        (vertex_buffer, index_buffer)
+        (vertex_buffer, face_buffer)
     }
 
     pub fn draw(&mut self, image_extent: [u32; 2], view: Matrix4<f32>) {
@@ -518,7 +522,10 @@ impl Renderer {
         builder
             .begin_render_pass(
                 RenderPassBeginInfo {
-                    clear_values: vec![Some([0.0, 0.0, 0.0, 1.0].into()), Some(1f32.into())],
+                    clear_values: vec![
+                        Some([128.0 / 255.0, 218.0 / 255.0, 235.0 / 255.0, 1.0].into()),
+                        Some(1f32.into()),
+                    ],
                     ..RenderPassBeginInfo::framebuffer(
                         self.framebuffers[image_index as usize].clone(),
                     )
@@ -530,7 +537,12 @@ impl Renderer {
             .unwrap()
             .bind_vertex_buffers(0, self.vertex_buffer.clone())
             .unwrap()
-            .bind_index_buffer(self.index_buffer.clone())
+            .bind_descriptor_sets(
+                PipelineBindPoint::Graphics,
+                self.pipeline.layout().clone(),
+                0,
+                self.descriptor_set.clone(),
+            )
             .unwrap()
             .push_constants(
                 self.pipeline.layout().clone(),
@@ -540,7 +552,7 @@ impl Renderer {
                 },
             )
             .unwrap()
-            .draw_indexed(self.index_buffer.len() as u32, 1, 0, 0, 0)
+            .draw(self.vertex_buffer.len() as u32, 1, 0, 0)
             .unwrap()
             .end_render_pass(Default::default())
             .unwrap();
@@ -627,7 +639,7 @@ impl Renderer {
             .collect::<Vec<_>>();
 
         let pipeline = {
-            let vertex_input_state = VertexContents::per_vertex()
+            let vertex_input_state = mesh::VertexBufferItem::per_vertex()
                 .definition(&vs.info().input_interface)
                 .unwrap();
             let stages = [
@@ -642,6 +654,22 @@ impl Renderer {
                         offset: 0,
                         size: size_of::<UniformBufferContents>() as u32,
                     }],
+                    set_layouts: vec![DescriptorSetLayout::new(
+                        device.clone(),
+                        DescriptorSetLayoutCreateInfo {
+                            bindings: BTreeMap::from([(
+                                0,
+                                DescriptorSetLayoutBinding {
+                                    stages: ShaderStages::VERTEX,
+                                    ..DescriptorSetLayoutBinding::descriptor_type(
+                                        DescriptorType::StorageBuffer,
+                                    )
+                                },
+                            )]),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap()],
                     ..Default::default()
                 },
             )
