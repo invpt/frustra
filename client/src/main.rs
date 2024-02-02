@@ -62,19 +62,39 @@ fn main() {
         .unwrap();
     window.set_cursor_visible(false);
 
-    let object = crate::world::Object::new(32, 32, 32, |x, y, z| {
+    /*let object = crate::world::Object::new(32, 32, 32, |x, y, z| {
         if y == 10 {
             return true;
         }
         let (x, y, z) = (x as f32, y as f32, z as f32);
         let (x, y, z) = (x - 16.0, y - 16.0, z - 16.0);
         (x * x + y * y + z * z) < 8.0f32.powi(2)
+    });*/
+    let mut object = crate::world::Object::new(48, 12, 48, |x,y,z| {
+        if y == 0 {
+            return true;
+        }
+
+        if y < 5 && (x == 0 || x == 11||z == 0 || z == 11) {
+            return true;
+        }
+
+        if y > 7 && (x == 0 || x == 11||z == 0 || z == 11) {
+            return true;
+        }
+
+        if (x == 0 || x == 11)&&(z == 0 || z == 11) {
+            return true;
+        }
+
+        y == 11 && x < 12 && z < 12
     });
-    /*let mut object = crate::world::Object::new(12, 12, 12, |_, _, _| false);
-    let blocks = [(0, 0, 0), (0, 1, 0)];
+    let blocks = [
+        // floor
+    ];
     for (x, y, z) in blocks {
         *object.get_mut(x, y, z).unwrap() = true;
-    }*/
+    }
     /*let mut object = crate::world::Object::new(48, 48, 48, |_, _, _| false);
     renderer::dda::dda(Vector3::new(8.5, 0.5, 47.5), Vector3::new(-0.57735026,
         0.57735026,

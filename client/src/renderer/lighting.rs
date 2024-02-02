@@ -24,7 +24,7 @@ pub fn light_face(
 ) -> LightMapEntry {
     let normal = face.as_vector();
     let point = Vector3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5) + normal;
-    let iters = 10usize;
+    let iters = 400usize;
 
     let sun = Vector3::new(0.6, 0.9, 0.7).normalize();
     let inv_softness = 20.0;
