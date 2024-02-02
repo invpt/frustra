@@ -12,20 +12,12 @@ use crate::{
 pub struct VertexBufferItem {
     #[format(R32_UINT)]
     bits: u32,
-    #[format(R32G32B32_SFLOAT)]
-    position: [f32; 3],
 }
 
 impl VertexBufferItem {
-    pub fn new(
-        data: u32,
-        face: CubeFace,
-        vertex: CubeVertex,
-        position: [f32; 3],
-    ) -> VertexBufferItem {
+    pub fn new(data: u32, face: CubeFace, vertex: CubeVertex) -> VertexBufferItem {
         VertexBufferItem {
             bits: (data << 8) | ((face as u32) << 5) | ((vertex as u32) << 2),
-            position,
         }
     }
 
@@ -72,16 +64,7 @@ pub fn mesh(
                 for tri in face_tris(direction) {
                     for vtx in tri {
                         let start = vertices.len();
-                        vertices.push(VertexBufferItem::new(
-                            0,
-                            direction,
-                            vtx,
-                            [
-                                x as f32 + vtx.x() as u8 as f32,
-                                y as f32 + vtx.y() as u8 as f32,
-                                z as f32 + vtx.z() as u8 as f32,
-                            ],
-                        ));
+                        vertices.push(VertexBufferItem::new(0, direction, vtx));
                         vertex(x, y, z, vtx, &mut vertices[start]);
                     }
                 }

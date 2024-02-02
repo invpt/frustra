@@ -15,7 +15,6 @@ layout(set = 0, binding = 0) buffer Faces {
 };
 
 layout(location = 0) in uint bits;
-layout(location = 1) in vec3 position;
 
 layout(location = 0) flat out float light;
 
