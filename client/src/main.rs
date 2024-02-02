@@ -16,11 +16,11 @@
 // that you want to learn Vulkan. This means that for example it won't go into details about what a
 // vertex or a shader is.
 
-use nalgebra::{Isometry3, Matrix4, Quaternion, Rotation3, Vector3};
-use rand::Rng;
+use nalgebra::{Matrix4, Rotation3, Vector3};
+
 use std::{collections::HashSet, sync::Arc, time::Instant};
 use winit::{
-    event::{DeviceEvent, ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent},
+    event::{DeviceEvent, ElementState, Event, VirtualKeyCode, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::{CursorGrabMode, Fullscreen, WindowBuilder},
 };
@@ -62,7 +62,7 @@ fn main() {
         .unwrap();
     window.set_cursor_visible(false);
 
-    let mut object = crate::world::Object::new(32, 32, 32, |x, y, z| {
+    let object = crate::world::Object::new(32, 32, 32, |x, y, z| {
         if y == 10 {
             return true;
         }

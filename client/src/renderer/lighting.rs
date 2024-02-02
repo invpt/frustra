@@ -1,6 +1,6 @@
 //! Computing the lighting of a voxel scene using raytracing-esque methods.
 
-use nalgebra::{Rotation3, Vector3};
+use nalgebra::{Vector3};
 use rand::{rngs::ThreadRng, Rng};
 use vulkano::buffer::BufferContents;
 
