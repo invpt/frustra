@@ -38,12 +38,12 @@ impl<T> Object<T> {
 
     pub fn adjacent(&self, x: usize, y: usize, z: usize, direction: CubeFace) -> Option<&T> {
         let (x, y, z) = match direction {
-            CubeFace::Up => (Some(x), y.checked_add(1), Some(z)),
-            CubeFace::Down => (Some(x), y.checked_sub(1), Some(z)),
+            CubeFace::Top => (Some(x), y.checked_add(1), Some(z)),
+            CubeFace::Bottom => (Some(x), y.checked_sub(1), Some(z)),
             CubeFace::Left => (x.checked_sub(1), Some(y), Some(z)),
             CubeFace::Right => (x.checked_add(1), Some(y), Some(z)),
-            CubeFace::Backwards => (Some(x), Some(y), z.checked_add(1)),
-            CubeFace::Forwards => (Some(x), Some(y), z.checked_sub(1)),
+            CubeFace::Back => (Some(x), Some(y), z.checked_add(1)),
+            CubeFace::Front => (Some(x), Some(y), z.checked_sub(1)),
         };
 
         if let (Some(x), Some(y), Some(z)) = (x, y, z) {

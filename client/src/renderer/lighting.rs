@@ -1,18 +1,11 @@
 //! Computing the lighting of a voxel scene using raytracing-esque methods.
 
-use nalgebra::{Vector3};
+use nalgebra::Vector3;
 use rand::{rngs::ThreadRng, Rng};
-use vulkano::buffer::BufferContents;
 
 use crate::{math::CubeFace, world::Object};
 
-#[derive(Clone, Copy, Debug, BufferContents)]
-#[repr(C)]
-pub struct LightMapEntry {
-    pub block_position: u32,
-    pub direct: f32,
-    pub ambient: f32,
-}
+use super::data::FaceData;
 
 /// Precomputes lighting for the given cube face.
 pub fn light_face(
@@ -21,10 +14,11 @@ pub fn light_face(
     z: isize,
     face: CubeFace,
     object: &Object<bool>,
-) -> LightMapEntry {
+    data: &mut FaceData,
+) {
     let normal = face.as_vector();
     let point = Vector3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5) + normal;
-    let iters = 400usize;
+    let iters = 4000usize;
 
     let sun = Vector3::new(0.6, 0.9, 0.7).normalize();
     let inv_softness = 20.0;
@@ -41,11 +35,8 @@ pub fn light_face(
     }
     ambient /= iters as f32;
 
-    LightMapEntry {
-        block_position: (z as u32) | ((y as u32) << 8) | ((x as u32) << 16),
-        direct,
-        ambient,
-    }
+    data.direct = direct;
+    data.ambient = ambient;
 }
 
 /// Casts a sun shadow ray.

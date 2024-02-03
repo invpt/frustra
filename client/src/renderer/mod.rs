@@ -26,14 +26,7 @@ use vulkano::{
     memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
     pipeline::{
         graphics::{
-            color_blend::{ColorBlendAttachmentState, ColorBlendState},
-            depth_stencil::{DepthState, DepthStencilState},
-            input_assembly::{InputAssemblyState},
-            multisample::MultisampleState,
-            rasterization::{CullMode, FrontFace, RasterizationState},
-            vertex_input::{Vertex, VertexDefinition},
-            viewport::{Viewport, ViewportState},
-            GraphicsPipelineCreateInfo,
+            color_blend::{ColorBlendAttachmentState, ColorBlendState}, depth_stencil::{DepthState, DepthStencilState}, input_assembly::{InputAssemblyState}, multisample::MultisampleState, rasterization::{CullMode, FrontFace, RasterizationState}, vertex_input::VertexInputState, viewport::{Viewport, ViewportState}, GraphicsPipelineCreateInfo
         },
         layout::{
             PipelineLayoutCreateInfo, PushConstantRange,
@@ -53,11 +46,13 @@ use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
 mod lighting;
 mod mesh;
+mod data;
 
-#[derive(BufferContents, Vertex)]
+use data::{FaceData};
+
+#[derive(BufferContents)]
 #[repr(C)]
 pub struct UniformBufferContents {
-    #[format(R32G32_SFLOAT)]
     pub projection_matrix: [[f32; 4]; 4],
 }
 
@@ -74,8 +69,7 @@ pub struct Renderer {
     swapchain: Arc<Swapchain>,
     images: Vec<Arc<Image>>,
     memory_allocator: Arc<StandardMemoryAllocator>,
-    vertex_buffer: Subbuffer<[mesh::VertexBufferItem]>,
-    face_buffer: Subbuffer<[lighting::LightMapEntry]>,
+    face_buffer: Subbuffer<[FaceData]>,
     render_pass: Arc<RenderPass>,
     pipeline: Arc<GraphicsPipeline>,
     descriptor_set: Arc<PersistentDescriptorSet>,
@@ -334,7 +328,7 @@ impl Renderer {
             render_pass.clone(),
         );
 
-        let (vertex_buffer, face_buffer) = Self::build_object(&memory_allocator, object);
+        let face_buffer = Self::build_object(&memory_allocator, object);
 
         let descriptor_set = PersistentDescriptorSet::new(
             &descriptor_set_allocator,
@@ -361,7 +355,6 @@ impl Renderer {
             swapchain,
             images,
             memory_allocator,
-            vertex_buffer,
             face_buffer,
             descriptor_set,
             render_pass,
@@ -394,38 +387,17 @@ impl Renderer {
     fn build_object(
         memory_allocator: &Arc<StandardMemoryAllocator>,
         object: &crate::world::Object<bool>,
-    ) -> (
-        Subbuffer<[mesh::VertexBufferItem]>,
-        Subbuffer<[lighting::LightMapEntry]>,
-    ) {
+    ) -> Subbuffer<[FaceData]> {
         let mut faces = Vec::new();
-        let vertices = mesh::mesh(
+        mesh::mesh(
             object,
-            |_, _, _, _, _| {},
-            |x, y, z, face, vertices| {
-                for vertex in vertices {
-                    vertex.set_data(faces.len() as u32);
-                }
-                let entry = lighting::light_face(x as isize, y as isize, z as isize, face, object);
-                faces.push(entry);
+            |x, y, z, face| {
+                let mut data = FaceData::new(x as u8, y as u8, z as u8, face);
+                lighting::light_face(x as isize, y as isize, z as isize, face, object, &mut data);
+                faces.push(data);
             },
-            |_, _, _, _| {},
+            |_, _, _| {},
         );
-
-        let vertex_buffer = Buffer::from_iter(
-            memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::VERTEX_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            vertices,
-        )
-        .unwrap();
 
         let face_buffer = Buffer::from_iter(
             memory_allocator.clone(),
@@ -442,7 +414,7 @@ impl Renderer {
         )
         .unwrap();
 
-        (vertex_buffer, face_buffer)
+        face_buffer
     }
 
     pub fn draw(&mut self, image_extent: [u32; 2], view: Matrix4<f32>) {
@@ -534,8 +506,6 @@ impl Renderer {
             .unwrap()
             .bind_pipeline_graphics(self.pipeline.clone())
             .unwrap()
-            .bind_vertex_buffers(0, self.vertex_buffer.clone())
-            .unwrap()
             .bind_descriptor_sets(
                 PipelineBindPoint::Graphics,
                 self.pipeline.layout().clone(),
@@ -551,7 +521,7 @@ impl Renderer {
                 },
             )
             .unwrap()
-            .draw(self.vertex_buffer.len() as u32, 1, 0, 0)
+            .draw(self.face_buffer.len() as u32 * 6, 1, 0, 0)
             .unwrap()
             .end_render_pass(Default::default())
             .unwrap();
@@ -638,9 +608,6 @@ impl Renderer {
             .collect::<Vec<_>>();
 
         let pipeline = {
-            let vertex_input_state = mesh::VertexBufferItem::per_vertex()
-                .definition(&vs.info().input_interface)
-                .unwrap();
             let stages = [
                 PipelineShaderStageCreateInfo::new(vs),
                 PipelineShaderStageCreateInfo::new(fs),
@@ -680,7 +647,9 @@ impl Renderer {
                 None,
                 GraphicsPipelineCreateInfo {
                     stages: stages.into_iter().collect(),
-                    vertex_input_state: Some(vertex_input_state),
+                    vertex_input_state: Some(VertexInputState {
+                        ..Default::default()
+                    }),
                     input_assembly_state: Some(InputAssemblyState::default()),
                     viewport_state: Some(ViewportState {
                         viewports: [Viewport {
