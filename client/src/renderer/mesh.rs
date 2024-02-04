@@ -101,14 +101,15 @@ impl ObjectMesh {
             };
 
             if object.get(nx, ny, nz) == Some(&true) {
-                self.faces.push(FaceData::new(nx, ny, nz, direction.opposite()));
+                self.faces
+                    .push(FaceData::new(nx, ny, nz, direction.opposite()));
             }
         }
     }
 
     pub fn create_buffer(
         &self,
-        memory_allocator: Arc<impl MemoryAllocator>,
+        memory_allocator: &Arc<impl MemoryAllocator>,
     ) -> Subbuffer<[FaceData]> {
         Buffer::from_iter(
             memory_allocator.clone(),
@@ -128,14 +129,9 @@ impl ObjectMesh {
 
     pub fn update_buffer(
         &self,
-        memory_allocator: Arc<impl MemoryAllocator>,
+        memory_allocator: &Arc<impl MemoryAllocator>,
         buffer: &mut Subbuffer<[FaceData]>,
     ) {
-        if buffer.len() >= self.faces.len() as u64 {
-            let mut buffer = buffer.write().unwrap();
-            buffer[..self.faces.len()].copy_from_slice(&self.faces[..])
-        } else {
-            *buffer = self.create_buffer(memory_allocator);
-        }
+        *buffer = self.create_buffer(memory_allocator);
     }
 }

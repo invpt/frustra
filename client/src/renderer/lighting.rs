@@ -14,15 +14,16 @@ pub fn light(object: &Object<bool>, mesh: &mut ObjectMesh) {
 }
 
 /// Precomputes lighting for the given cube face.
-fn light_face(
-    object: &Object<bool>,
-    face: &mut FaceData,
-) {
+fn light_face(object: &Object<bool>, face: &mut FaceData) {
     let normal = face.face().as_vector();
-    let point = Vector3::new(face.x() as f32 + 0.5, face.y() as f32 + 0.5, face.z() as f32 + 0.5) + normal;
-    let iters = 4000usize;
+    let point = Vector3::new(
+        face.x() as f32 + 0.5,
+        face.y() as f32 + 0.5,
+        face.z() as f32 + 0.5,
+    ) + normal;
 
-    let sun = Vector3::new(0.6, 0.9, 0.7).normalize();
+    let iters = 100usize;
+    let sun = Vector3::new(-0.6, 0.9, -0.7).normalize();
     let inv_softness = 20.0;
     let mut direct = 0.0;
     for _ in 0..iters {
@@ -30,7 +31,8 @@ fn light_face(
     }
     direct /= iters as f32;
 
-    let inv_softness = 1.5;
+    let iters = 2000usize;
+    let inv_softness = 0.0;
     let mut ambient = 0.0;
     for _ in 0..iters {
         ambient += ambient_ray(point, normal, inv_softness, object);
@@ -80,26 +82,7 @@ fn cast_ray(
     to_light: Vector3<f32>,
     object: &Object<bool>,
 ) -> f32 {
-    let mut lit = false;
-    dda(point, to_light, |x, y, z| {
-        if let (Ok(x), Ok(y), Ok(z)) = (x.try_into(), y.try_into(), z.try_into()) {
-            if let Some(b) = object.get(x, y, z) {
-                if *b && (x, y, z) != (point.x as u8, point.y as u8, point.z as u8) {
-                    TraversalAction::Stop
-                } else {
-                    TraversalAction::Continue
-                }
-            } else {
-                lit = true;
-                TraversalAction::Stop
-            }
-        } else {
-            lit = true;
-            TraversalAction::Stop
-        }
-    });
-
-    if lit {
+    if object.cast_ray(point, to_light).is_none() {
         to_light.dot(&normal).max(0.0)
     } else {
         0.0
@@ -107,11 +90,11 @@ fn cast_ray(
 }
 
 fn random_in_hemisphere(rng: &mut ThreadRng, normal: &Vector3<f32>) -> Vector3<f32> {
-    let on_unit_sphere = random_unit_sphere(rng);
-    if on_unit_sphere.dot(normal) > 0.0 {
-        on_unit_sphere
+    let in_unit_sphere = random_unit_sphere(rng);
+    if in_unit_sphere.dot(normal) > 0.0 {
+        in_unit_sphere
     } else {
-        -on_unit_sphere
+        -in_unit_sphere
     }
 }
 
@@ -125,66 +108,5 @@ fn random_unit_sphere(rng: &mut ThreadRng) -> Vector3<f32> {
         if p.norm_squared() <= 1.0 {
             return p;
         }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum TraversalAction {
-    Stop,
-    Continue,
-}
-
-fn dda(
-    start: Vector3<f32>,
-    dir: Vector3<f32>,
-    mut f: impl FnMut(isize, isize, isize) -> TraversalAction,
-) {
-    let mut pos = Vector3::new(
-        start.x.floor() as isize,
-        start.y.floor() as isize,
-        start.z.floor() as isize,
-    );
-    let step = Vector3::new(sign(dir.x), sign(dir.y), sign(dir.z));
-    let mut t_max = (pos.cast() - start).component_div(&dir);
-    for x in t_max.iter_mut() {
-        if !x.is_finite() {
-            *x = f32::INFINITY;
-        }
-    }
-    let mut t_delta = Vector3::new(1.0, 1.0, 1.0).component_div(&dir).abs();
-    for x in t_delta.iter_mut() {
-        if !x.is_finite() {
-            *x = f32::NAN;
-        }
-    }
-
-    while f(pos.x, pos.y, pos.z) == TraversalAction::Continue {
-        if t_max.x < t_max.y {
-            if t_max.x < t_max.z {
-                pos.x += step.x;
-                t_max.x += t_delta.x;
-            } else {
-                pos.z += step.z;
-                t_max.z += t_delta.z;
-            }
-        } else {
-            if t_max.y < t_max.z {
-                pos.y += step.y;
-                t_max.y += t_delta.y;
-            } else {
-                pos.z += step.z;
-                t_max.z += t_delta.z;
-            }
-        }
-    }
-}
-
-fn sign(x: f32) -> isize {
-    if x < 0.0 {
-        -1
-    } else if x > 0.0 {
-        1
-    } else {
-        0
     }
 }

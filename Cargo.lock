@@ -346,6 +346,7 @@ dependencies = [
  "nalgebra",
  "rand",
  "raw-window-handle",
+ "smallvec",
  "vulkano",
  "vulkano-shaders",
  "winit",

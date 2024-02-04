@@ -1,4 +1,4 @@
-
+use nalgebra::Vector3;
 
 use crate::math::CubeFace;
 
@@ -58,8 +58,11 @@ impl<T> Object<T> {
             return None;
         }
 
-        self.data
-            .get(y as usize * self.size.x as usize * self.size.z as usize + x as usize * self.size.z as usize + z as usize)
+        self.data.get(
+            y as usize * self.size.x as usize * self.size.z as usize
+                + x as usize * self.size.z as usize
+                + z as usize,
+        )
     }
 
     pub fn get_mut(&mut self, x: u8, y: u8, z: u8) -> Option<&mut T> {
@@ -67,15 +70,115 @@ impl<T> Object<T> {
             return None;
         }
 
-        self.data
-            .get_mut(y as usize * self.size.x as usize * self.size.z as usize + x as usize * self.size.z as usize + z as usize)
+        self.data.get_mut(
+            y as usize * self.size.x as usize * self.size.z as usize
+                + x as usize * self.size.z as usize
+                + z as usize,
+        )
     }
 }
 
-pub struct Pos3 {
-    pub x: usize,
-    pub y: usize,
-    pub z: usize,
+impl Object<bool> {
+    /// Casts a ray, returning the hit coordinate if the ray intersects with a voxel.
+    pub fn cast_ray(&self, start: Vector3<f32>, dir: Vector3<f32>) -> Option<(u8, u8, u8)> {
+        fn sign(x: f32) -> i8 {
+            if x < 0.0 {
+                -1
+            } else if x > 0.0 {
+                1
+            } else {
+                0
+            }
+        }
+
+        fn fract(x: f32) -> f32 {
+            if x >= 0.0 {
+                x.fract()
+            } else {
+                1.0 + x.fract()
+            }
+        }
+
+        // first, intersect with the aabb
+        let Some(start) = Self::intersect_aabb(
+            start,
+            dir,
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(
+                self.size.x as f32 - 1.0,
+                self.size.y as f32 - 1.0,
+                self.size.z as f32 - 1.0,
+            ),
+        ) else {
+            return None;
+        };
+
+        let mut pos = start.map(|x| x.floor() as u8);
+        let step = dir.map(sign);
+        let mut t_delta = Vector3::new(1.0, 1.0, 1.0).component_div(&dir).abs();
+        for x in t_delta.iter_mut() {
+            if !x.is_finite() {
+                *x = f32::NAN;
+            }
+        }
+        let mut t_max = t_delta.component_mul(&(Vector3::new(1.0, 1.0, 1.0) - start.map(fract)));
+        for x in t_max.iter_mut() {
+            if !x.is_finite() {
+                *x = f32::INFINITY;
+            }
+        }
+
+        // the < 255 checks are to make sure we don't overflow
+        let mut current = self.get(pos.x, pos.y, pos.z);
+        while matches!(current, Some(false)) && pos.x < 255 && pos.y < 255 && pos.z < 255 {
+            if t_max.x < t_max.y {
+                if t_max.x < t_max.z {
+                    pos.x = pos.x.wrapping_add_signed(step.x);
+                    t_max.x += t_delta.x;
+                } else {
+                    pos.z = pos.z.wrapping_add_signed(step.z);
+                    t_max.z += t_delta.z;
+                }
+            } else {
+                if t_max.y < t_max.z {
+                    pos.y = pos.y.wrapping_add_signed(step.y);
+                    t_max.y += t_delta.y;
+                } else {
+                    pos.z = pos.z.wrapping_add_signed(step.z);
+                    t_max.z += t_delta.z;
+                }
+            }
+
+            current = self.get(pos.x, pos.y, pos.z);
+        }
+
+        match current {
+            Some(true) => Some((pos.x, pos.y, pos.z)),
+            Some(false) | None => None,
+        }
+    }
+
+    fn intersect_aabb(
+        o: Vector3<f32>,
+        r: Vector3<f32>,
+        l: Vector3<f32>,
+        h: Vector3<f32>,
+    ) -> Option<Vector3<f32>> {
+        if o >= l && o <= h {
+            return Some(o);
+        }
+
+        let t_low = (l - o).component_div(&r);
+        let t_high = (h - o).component_div(&r);
+        let t_close = t_low.zip_map(&t_high, |a, b| a.min(b)).max();
+        let t_far = t_low.zip_map(&t_high, |a, b| a.max(b)).min();
+
+        if t_close < t_far && t_close >= 0.0 {
+            Some(o + t_close * r)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

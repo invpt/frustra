@@ -2,18 +2,17 @@ use std::{collections::BTreeMap, mem::size_of, sync::Arc};
 
 use nalgebra::Matrix4;
 use vulkano::{
-    buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer},
+    buffer::{BufferContents, Subbuffer},
     command_buffer::{
         allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
         RenderPassBeginInfo,
     },
     descriptor_set::{
-        allocator::{StandardDescriptorSetAllocator, StandardDescriptorSetAllocatorCreateInfo},
         layout::{
-            DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorSetLayoutCreateInfo,
-            DescriptorType,
+            DescriptorSetLayout, DescriptorSetLayoutBinding, DescriptorSetLayoutCreateFlags,
+            DescriptorSetLayoutCreateInfo, DescriptorType,
         },
-        PersistentDescriptorSet, WriteDescriptorSet,
+        WriteDescriptorSet,
     },
     device::{
         physical::{PhysicalDevice, PhysicalDeviceType},
@@ -23,14 +22,20 @@ use vulkano::{
     format::Format,
     image::{view::ImageView, Image, ImageCreateInfo, ImageType, ImageUsage},
     instance::{Instance, InstanceCreateFlags, InstanceCreateInfo, InstanceExtensions},
-    memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
+    memory::allocator::{AllocationCreateInfo, StandardMemoryAllocator},
     pipeline::{
         graphics::{
-            color_blend::{ColorBlendAttachmentState, ColorBlendState}, depth_stencil::{DepthState, DepthStencilState}, input_assembly::{InputAssemblyState}, multisample::MultisampleState, rasterization::{CullMode, FrontFace, RasterizationState}, vertex_input::VertexInputState, viewport::{Viewport, ViewportState}, GraphicsPipelineCreateInfo
+            color_blend::{ColorBlendAttachmentState, ColorBlendState},
+            depth_stencil::{DepthState, DepthStencilState},
+            input_assembly::InputAssemblyState,
+            multisample::MultisampleState,
+            rasterization::{CullMode, FrontFace, RasterizationState},
+            vertex_input::VertexInputState,
+            viewport::{Viewport, ViewportState},
+            GraphicsPipelineCreateInfo,
         },
-        layout::{
-            PipelineLayoutCreateInfo, PushConstantRange,
-        }, GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineLayout,
+        layout::{PipelineLayoutCreateInfo, PushConstantRange},
+        GraphicsPipeline, Pipeline, PipelineBindPoint, PipelineLayout,
         PipelineShaderStageCreateInfo,
     },
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass},
@@ -44,11 +49,11 @@ use vulkano::{
 
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
+mod data;
 mod lighting;
 mod mesh;
-mod data;
 
-use data::{FaceData};
+use data::FaceData;
 
 use self::mesh::ObjectMesh;
 
@@ -71,10 +76,10 @@ pub struct Renderer {
     swapchain: Arc<Swapchain>,
     images: Vec<Arc<Image>>,
     memory_allocator: Arc<StandardMemoryAllocator>,
+    mesh: ObjectMesh,
     face_buffer: Subbuffer<[FaceData]>,
     render_pass: Arc<RenderPass>,
     pipeline: Arc<GraphicsPipeline>,
-    descriptor_set: Arc<PersistentDescriptorSet>,
     framebuffers: Vec<Arc<Framebuffer>>,
     command_buffer_allocator: StandardCommandBufferAllocator,
 
@@ -121,6 +126,7 @@ impl Renderer {
         // we need a `Swapchain`, which is provided by the `khr_swapchain` extension.
         let device_extensions = DeviceExtensions {
             khr_swapchain: true,
+            khr_push_descriptor: true,
             ..DeviceExtensions::empty()
         };
 
@@ -269,12 +275,6 @@ impl Renderer {
         };
 
         let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
-        let descriptor_set_allocator = Arc::new(StandardDescriptorSetAllocator::new(
-            device.clone(),
-            StandardDescriptorSetAllocatorCreateInfo {
-                ..Default::default()
-            },
-        ));
 
         mod vs {
             vulkano_shaders::shader! {
@@ -330,15 +330,7 @@ impl Renderer {
             render_pass.clone(),
         );
 
-        let face_buffer = Self::build_object(&memory_allocator, object);
-
-        let descriptor_set = PersistentDescriptorSet::new(
-            &descriptor_set_allocator,
-            pipeline.layout().set_layouts()[0].clone(),
-            [WriteDescriptorSet::buffer(0, face_buffer.clone())],
-            [],
-        )
-        .unwrap();
+        let (mesh, face_buffer) = Self::build_object(&memory_allocator, object);
 
         let command_buffer_allocator =
             StandardCommandBufferAllocator::new(device.clone(), Default::default());
@@ -357,8 +349,8 @@ impl Renderer {
             swapchain,
             images,
             memory_allocator,
+            mesh,
             face_buffer,
-            descriptor_set,
             render_pass,
             pipeline,
             framebuffers,
@@ -386,15 +378,22 @@ impl Renderer {
         projection_matrix
     }
 
+    pub fn removed(&mut self, object: &crate::world::Object<bool>, x: u8, y: u8, z: u8) {
+        self.mesh.removed(object, x, y, z);
+        self.mesh
+            .update_buffer(&self.memory_allocator, &mut self.face_buffer);
+    }
+
     fn build_object(
         memory_allocator: &Arc<StandardMemoryAllocator>,
         object: &crate::world::Object<bool>,
-    ) -> Subbuffer<[FaceData]> {
+    ) -> (ObjectMesh, Subbuffer<[FaceData]>) {
         let mut mesh = ObjectMesh::new(object);
 
         lighting::light(object, &mut mesh);
 
-        mesh.create_buffer(memory_allocator.clone())
+        let buffer = mesh.create_buffer(memory_allocator);
+        (mesh, buffer)
     }
 
     pub fn draw(&mut self, image_extent: [u32; 2], view: Matrix4<f32>) {
@@ -486,11 +485,14 @@ impl Renderer {
             .unwrap()
             .bind_pipeline_graphics(self.pipeline.clone())
             .unwrap()
-            .bind_descriptor_sets(
+            .push_descriptor_set(
                 PipelineBindPoint::Graphics,
                 self.pipeline.layout().clone(),
                 0,
-                self.descriptor_set.clone(),
+                smallvec::SmallVec::<[_; 8]>::from(vec![WriteDescriptorSet::buffer(
+                    0,
+                    self.face_buffer.clone(),
+                )]),
             )
             .unwrap()
             .push_constants(
@@ -603,6 +605,7 @@ impl Renderer {
                     set_layouts: vec![DescriptorSetLayout::new(
                         device.clone(),
                         DescriptorSetLayoutCreateInfo {
+                            flags: DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR,
                             bindings: BTreeMap::from([(
                                 0,
                                 DescriptorSetLayoutBinding {
