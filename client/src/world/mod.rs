@@ -81,6 +81,16 @@ impl<T> Object<T> {
 impl Object<bool> {
     /// Casts a ray, returning the hit coordinate if the ray intersects with a voxel.
     pub fn cast_ray(&self, start: Vector3<f32>, dir: Vector3<f32>) -> Option<(u8, u8, u8)> {
+        fn fsign(x: f32) -> f32 {
+            if x < 0.0 {
+                -1.0
+            } else if x > 0.0 {
+                1.0
+            } else {
+                0.0
+            }
+        }
+
         fn sign(x: f32) -> i8 {
             if x < 0.0 {
                 -1
@@ -88,14 +98,6 @@ impl Object<bool> {
                 1
             } else {
                 0
-            }
-        }
-
-        fn fract(x: f32) -> f32 {
-            if x >= 0.0 {
-                x.fract()
-            } else {
-                1.0 + x.fract()
             }
         }
 
@@ -113,20 +115,15 @@ impl Object<bool> {
             return None;
         };
 
-        let mut pos = start.map(|x| x.floor() as u8);
+        // this version of the initialization code comes from https://www.shadertoy.com/view/4dX3zl
+        // (why is it so hard to initialize DDA???)
+        let mut pos = start.map(|x| x as u8);
         let step = dir.map(sign);
-        let mut t_delta = Vector3::new(1.0, 1.0, 1.0).component_div(&dir).abs();
-        for x in t_delta.iter_mut() {
-            if !x.is_finite() {
-                *x = f32::NAN;
-            }
-        }
-        let mut t_max = t_delta.component_mul(&(Vector3::new(1.0, 1.0, 1.0) - start.map(fract)));
-        for x in t_max.iter_mut() {
-            if !x.is_finite() {
-                *x = f32::INFINITY;
-            }
-        }
+        let fstep = dir.map(fsign);
+        let t_delta = Vector3::repeat(dir.norm()).component_div(&dir).abs();
+        let mut t_max = t_delta.component_mul(
+            &(fstep.component_mul(&(pos.cast::<f32>() - start)) + (fstep * 0.5).add_scalar(0.5)),
+        );
 
         // the < 255 checks are to make sure we don't overflow
         let mut current = self.get(pos.x, pos.y, pos.z);
