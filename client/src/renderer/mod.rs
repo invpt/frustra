@@ -4,8 +4,7 @@ use nalgebra::Matrix4;
 use vulkano::{
     buffer::{BufferContents, Subbuffer},
     command_buffer::{
-        allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
-        RenderPassBeginInfo,
+        allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo
     },
     descriptor_set::{
         layout::{
@@ -27,9 +26,9 @@ use vulkano::{
         graphics::{
             color_blend::{ColorBlendAttachmentState, ColorBlendState},
             depth_stencil::{DepthState, DepthStencilState},
-            input_assembly::InputAssemblyState,
+            input_assembly::{InputAssemblyState, PrimitiveTopology},
             multisample::MultisampleState,
-            rasterization::{CullMode, FrontFace, RasterizationState},
+            rasterization::{CullMode, FrontFace, PolygonMode, RasterizationState},
             vertex_input::VertexInputState,
             viewport::{Viewport, ViewportState},
             GraphicsPipelineCreateInfo,
@@ -80,11 +79,14 @@ pub struct Renderer {
     face_buffer: Subbuffer<[FaceData]>,
     render_pass: Arc<RenderPass>,
     pipeline: Arc<GraphicsPipeline>,
+    crosshair_pipeline: Arc<GraphicsPipeline>,
     framebuffers: Vec<Arc<Framebuffer>>,
     command_buffer_allocator: StandardCommandBufferAllocator,
 
     vs: EntryPoint,
     fs: EntryPoint,
+    crosshair_vs: EntryPoint,
+    crosshair_fs: EntryPoint,
 
     recreate_swapchain: bool,
     previous_frame_end: Option<Box<(dyn GpuFuture + 'static)>>,
@@ -290,7 +292,21 @@ impl Renderer {
             }
         }
 
-        let render_pass = vulkano::single_pass_renderpass!(
+        mod crosshair_vs {
+            vulkano_shaders::shader! {
+                ty: "vertex",
+                path: "src/renderer/shaders/crosshair_vert.glsl",
+            }
+        }
+
+        mod crosshair_fs {
+            vulkano_shaders::shader! {
+                ty: "fragment",
+                path: "src/renderer/shaders/crosshair_frag.glsl",
+            }
+        }
+
+        let render_pass = vulkano::ordered_passes_renderpass!(
             device.clone(),
             attachments: {
                 color: {
@@ -306,10 +322,18 @@ impl Renderer {
                     store_op: DontCare,
                 },
             },
-            pass: {
-                color: [color],
-                depth_stencil: {depth_stencil},
-            },
+            passes: [
+                {
+                    color: [color],
+                    depth_stencil: {depth_stencil},
+                    input: [],
+                },
+                {
+                    color: [color],
+                    depth_stencil: {},
+                    input: [],
+                }
+            ],
         )
         .unwrap();
 
@@ -321,11 +345,21 @@ impl Renderer {
             .unwrap()
             .entry_point("main")
             .unwrap();
+        let crosshair_vs = crosshair_vs::load(device.clone())
+            .unwrap()
+            .entry_point("main")
+            .unwrap();
+        let crosshair_fs = crosshair_fs::load(device.clone())
+            .unwrap()
+            .entry_point("main")
+            .unwrap();
 
-        let (pipeline, framebuffers) = Self::window_size_dependent_setup(
+        let (pipeline, crosshair_pipeline, framebuffers) = Self::window_size_dependent_setup(
             memory_allocator.clone(),
             vs.clone(),
             fs.clone(),
+            crosshair_vs.clone(),
+            crosshair_fs.clone(),
             &images,
             render_pass.clone(),
         );
@@ -353,10 +387,13 @@ impl Renderer {
             face_buffer,
             render_pass,
             pipeline,
+            crosshair_pipeline,
             framebuffers,
             command_buffer_allocator,
             vs,
             fs,
+            crosshair_vs,
+            crosshair_fs,
         })
     }
 
@@ -416,14 +453,17 @@ impl Renderer {
                 .expect("failed to recreate swapchain");
 
             self.swapchain = new_swapchain;
-            let (new_pipeline, new_framebuffers) = Self::window_size_dependent_setup(
+            let (new_pipeline, new_crosshair_pipeline, new_framebuffers) = Self::window_size_dependent_setup(
                 self.memory_allocator.clone(),
                 self.vs.clone(),
                 self.fs.clone(),
+                self.crosshair_vs.clone(),
+                self.crosshair_fs.clone(),
                 &new_images,
                 self.render_pass.clone(),
             );
             self.pipeline = new_pipeline;
+            self.crosshair_pipeline = new_crosshair_pipeline;
             self.framebuffers = new_framebuffers;
             self.recreate_swapchain = false;
         }
@@ -505,6 +545,28 @@ impl Renderer {
             .unwrap()
             .draw(self.face_buffer.len() as u32 * 6, 1, 0, 0)
             .unwrap()
+            .next_subpass(SubpassEndInfo::default(), SubpassBeginInfo {
+                contents: SubpassContents::Inline,
+                ..Default::default()
+            })
+            .unwrap()
+            .bind_pipeline_graphics(self.crosshair_pipeline.clone())
+            .unwrap()
+            .push_constants(
+                self.pipeline.layout().clone(),
+                0,
+                UniformBufferContents {
+                    projection_matrix: [
+                        [image_extent[1] as f32 / image_extent[0] as f32, 0.0, 0.0, 0.0],
+                        [0.0, 1.0, 0.0, 0.0],
+                        [0.0, 0.0, 1.0, 0.0],
+                        [0.0, 0.0, 0.0, 1.0],
+                    ],
+                },
+            )
+            .unwrap()
+            .draw(4, 1, 0, 0)
+            .unwrap()
             .end_render_pass(Default::default())
             .unwrap();
 
@@ -552,9 +614,11 @@ impl Renderer {
         memory_allocator: Arc<StandardMemoryAllocator>,
         vs: EntryPoint,
         fs: EntryPoint,
+        crosshair_vs: EntryPoint,
+        crosshair_fs: EntryPoint,
         images: &[Arc<Image>],
         render_pass: Arc<RenderPass>,
-    ) -> (Arc<GraphicsPipeline>, Vec<Arc<Framebuffer>>) {
+    ) -> (Arc<GraphicsPipeline>, Arc<GraphicsPipeline>, Vec<Arc<Framebuffer>>) {
         let device = memory_allocator.device().clone();
         let extent = images[0].extent();
 
@@ -589,12 +653,12 @@ impl Renderer {
             })
             .collect::<Vec<_>>();
 
-        let pipeline = {
-            let stages = [
+        let (voxel_pipeline, crosshair_pipeline) = {
+            let voxel_stages = [
                 PipelineShaderStageCreateInfo::new(vs),
                 PipelineShaderStageCreateInfo::new(fs),
             ];
-            let layout = PipelineLayout::new(
+            let voxel_layout = PipelineLayout::new(
                 device.clone(),
                 PipelineLayoutCreateInfo {
                     push_constant_ranges: vec![PushConstantRange {
@@ -623,13 +687,12 @@ impl Renderer {
                 },
             )
             .unwrap();
-            let subpass = Subpass::from(render_pass, 0).unwrap();
-
-            GraphicsPipeline::new(
-                device,
+            let voxel_subpass = Subpass::from(render_pass.clone(), 0).unwrap();
+            let voxel_pipeline = GraphicsPipeline::new(
+                device.clone(),
                 None,
                 GraphicsPipelineCreateInfo {
-                    stages: stages.into_iter().collect(),
+                    stages: voxel_stages.into_iter().collect(),
                     vertex_input_state: Some(VertexInputState {
                         ..Default::default()
                     }),
@@ -656,16 +719,61 @@ impl Renderer {
                     }),
                     multisample_state: Some(MultisampleState::default()),
                     color_blend_state: Some(ColorBlendState::with_attachment_states(
-                        subpass.num_color_attachments(),
+                        voxel_subpass.num_color_attachments(),
                         ColorBlendAttachmentState::default(),
                     )),
-                    subpass: Some(subpass.into()),
-                    ..GraphicsPipelineCreateInfo::layout(layout)
+                    subpass: Some(voxel_subpass.into()),
+                    ..GraphicsPipelineCreateInfo::layout(voxel_layout)
                 },
             )
-            .unwrap()
+            .unwrap();
+
+            let crosshair_stages = [
+                PipelineShaderStageCreateInfo::new(crosshair_vs),
+                PipelineShaderStageCreateInfo::new(crosshair_fs),
+            ];
+            let crosshair_layout =
+                PipelineLayout::new(device.clone(), PipelineLayoutCreateInfo::default()).unwrap();
+            let crosshair_subpass = Subpass::from(render_pass, 1).unwrap();
+            let crosshair_pipeline = GraphicsPipeline::new(
+                device,
+                None,
+                GraphicsPipelineCreateInfo {
+                    stages: crosshair_stages.into_iter().collect(),
+                    vertex_input_state: Some(VertexInputState {
+                        ..Default::default()
+                    }),
+                    viewport_state: Some(ViewportState {
+                        viewports: [Viewport {
+                            offset: [0.0, 0.0],
+                            extent: [extent[0] as f32, extent[1] as f32],
+                            depth_range: 1.0..=0.0,
+                        }]
+                        .into_iter()
+                        .collect(),
+                        ..Default::default()
+                    }),
+                    rasterization_state: Some(RasterizationState {
+                        ..Default::default()
+                    }),
+                    input_assembly_state: Some(InputAssemblyState {
+                        topology: PrimitiveTopology::TriangleStrip,
+                        ..Default::default()
+                    }),
+                    multisample_state: Some(MultisampleState::default()),
+                    color_blend_state: Some(ColorBlendState::with_attachment_states(
+                        crosshair_subpass.num_color_attachments(),
+                        ColorBlendAttachmentState::default(),
+                    )),
+                    subpass: Some(crosshair_subpass.into()),
+                    ..GraphicsPipelineCreateInfo::layout(crosshair_layout)
+                },
+            )
+            .unwrap();
+
+            (voxel_pipeline, crosshair_pipeline)
         };
 
-        (pipeline, framebuffers)
+        (voxel_pipeline, crosshair_pipeline, framebuffers)
     }
 }
