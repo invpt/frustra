@@ -50,6 +50,8 @@ mod data;
 
 use data::{FaceData};
 
+use self::mesh::ObjectMesh;
+
 #[derive(BufferContents)]
 #[repr(C)]
 pub struct UniformBufferContents {
@@ -388,33 +390,11 @@ impl Renderer {
         memory_allocator: &Arc<StandardMemoryAllocator>,
         object: &crate::world::Object<bool>,
     ) -> Subbuffer<[FaceData]> {
-        let mut faces = Vec::new();
-        mesh::mesh(
-            object,
-            |x, y, z, face| {
-                let mut data = FaceData::new(x as u8, y as u8, z as u8, face);
-                lighting::light_face(x as isize, y as isize, z as isize, face, object, &mut data);
-                faces.push(data);
-            },
-            |_, _, _| {},
-        );
+        let mut mesh = ObjectMesh::new(object);
 
-        let face_buffer = Buffer::from_iter(
-            memory_allocator.clone(),
-            BufferCreateInfo {
-                usage: BufferUsage::STORAGE_BUFFER,
-                ..Default::default()
-            },
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            },
-            faces,
-        )
-        .unwrap();
+        lighting::light(object, &mut mesh);
 
-        face_buffer
+        mesh.create_buffer(memory_allocator.clone())
     }
 
     pub fn draw(&mut self, image_extent: [u32; 2], view: Matrix4<f32>) {

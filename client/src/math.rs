@@ -29,6 +29,18 @@ impl CubeFace {
         }
     }
 
+    pub fn as_triple(self) -> (i8, i8, i8) {
+        use CubeFace::*;
+        match self {
+            Front => (0, 0, -1),
+            Back => (0, 0, 1),
+            Top => (0, 1, 0),
+            Bottom => (0, -1, 0),
+            Left => (-1, 0, 0),
+            Right => (1, 0, 0),
+        }
+    }
+
     pub fn opposite(self) -> CubeFace {
         use CubeFace::*;
         match self {

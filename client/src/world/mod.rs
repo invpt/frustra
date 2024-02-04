@@ -8,9 +8,9 @@ pub struct Object<T> {
 }
 
 impl<T> Object<T> {
-    pub fn new(x: usize, y: usize, z: usize, fill: impl Fn(usize, usize, usize) -> T) -> Object<T> {
+    pub fn new(x: u8, y: u8, z: u8, fill: impl Fn(u8, u8, u8) -> T) -> Object<T> {
         let size = Size3 { x, y, z };
-        let mut data = Vec::with_capacity(x * y * z);
+        let mut data = Vec::with_capacity(x as usize * y as usize * z as usize);
 
         for (x, y, z) in Self::positions_for_size(size) {
             data.push(fill(x, y, z));
@@ -22,21 +22,21 @@ impl<T> Object<T> {
         }
     }
 
-    pub fn positions(&self) -> impl Iterator<Item = (usize, usize, usize)> {
+    pub fn positions(&self) -> impl Iterator<Item = (u8, u8, u8)> {
         Self::positions_for_size(self.size)
     }
 
-    fn positions_for_size(size: Size3) -> impl Iterator<Item = (usize, usize, usize)> {
+    fn positions_for_size(size: Size3) -> impl Iterator<Item = (u8, u8, u8)> {
         (0..size.y)
             .flat_map(move |y| (0..size.x).flat_map(move |x| (0..size.z).map(move |z| (x, y, z))))
     }
 
-    pub fn items(&self) -> impl Iterator<Item = (usize, usize, usize, &T)> {
+    pub fn items(&self) -> impl Iterator<Item = (u8, u8, u8, &T)> {
         self.positions()
             .map(|(x, y, z)| (x, y, z, self.get(x, y, z).unwrap()))
     }
 
-    pub fn adjacent(&self, x: usize, y: usize, z: usize, direction: CubeFace) -> Option<&T> {
+    pub fn adjacent(&self, x: u8, y: u8, z: u8, direction: CubeFace) -> Option<&T> {
         let (x, y, z) = match direction {
             CubeFace::Top => (Some(x), y.checked_add(1), Some(z)),
             CubeFace::Bottom => (Some(x), y.checked_sub(1), Some(z)),
@@ -53,20 +53,22 @@ impl<T> Object<T> {
         }
     }
 
-    pub fn get(&self, x: usize, y: usize, z: usize) -> Option<&T> {
+    pub fn get(&self, x: u8, y: u8, z: u8) -> Option<&T> {
         if x >= self.size.x || y >= self.size.y || z >= self.size.z {
             return None;
         }
+
         self.data
-            .get(y * self.size.x * self.size.z + x * self.size.z + z)
+            .get(y as usize * self.size.x as usize * self.size.z as usize + x as usize * self.size.z as usize + z as usize)
     }
 
-    pub fn get_mut(&mut self, x: usize, y: usize, z: usize) -> Option<&mut T> {
+    pub fn get_mut(&mut self, x: u8, y: u8, z: u8) -> Option<&mut T> {
         if x >= self.size.x || y >= self.size.y || z >= self.size.z {
             return None;
         }
+
         self.data
-            .get_mut(y * self.size.x * self.size.z + x * self.size.z + z)
+            .get_mut(y as usize * self.size.x as usize * self.size.z as usize + x as usize * self.size.z as usize + z as usize)
     }
 }
 
@@ -79,9 +81,9 @@ pub struct Pos3 {
 #[derive(Debug, Clone, Copy)]
 pub struct Size3 {
     /// Sideways (x) size.
-    pub x: usize,
+    pub x: u8,
     /// Vertical (y) size.
-    pub y: usize,
+    pub y: u8,
     /// Forwards (z) size.
-    pub z: usize,
+    pub z: u8,
 }

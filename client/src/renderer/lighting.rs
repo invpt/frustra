@@ -3,21 +3,23 @@
 use nalgebra::Vector3;
 use rand::{rngs::ThreadRng, Rng};
 
-use crate::{math::CubeFace, world::Object};
+use crate::world::Object;
 
-use super::data::FaceData;
+use super::{data::FaceData, mesh::ObjectMesh};
+
+pub fn light(object: &Object<bool>, mesh: &mut ObjectMesh) {
+    for face in &mut mesh.faces {
+        light_face(object, face);
+    }
+}
 
 /// Precomputes lighting for the given cube face.
-pub fn light_face(
-    x: isize,
-    y: isize,
-    z: isize,
-    face: CubeFace,
+fn light_face(
     object: &Object<bool>,
-    data: &mut FaceData,
+    face: &mut FaceData,
 ) {
-    let normal = face.as_vector();
-    let point = Vector3::new(x as f32 + 0.5, y as f32 + 0.5, z as f32 + 0.5) + normal;
+    let normal = face.face().as_vector();
+    let point = Vector3::new(face.x() as f32 + 0.5, face.y() as f32 + 0.5, face.z() as f32 + 0.5) + normal;
     let iters = 4000usize;
 
     let sun = Vector3::new(0.6, 0.9, 0.7).normalize();
@@ -35,8 +37,8 @@ pub fn light_face(
     }
     ambient /= iters as f32;
 
-    data.direct = direct;
-    data.ambient = ambient;
+    face.direct = direct;
+    face.ambient = ambient;
 }
 
 /// Casts a sun shadow ray.
@@ -82,7 +84,7 @@ fn cast_ray(
     dda(point, to_light, |x, y, z| {
         if let (Ok(x), Ok(y), Ok(z)) = (x.try_into(), y.try_into(), z.try_into()) {
             if let Some(b) = object.get(x, y, z) {
-                if *b && (x, y, z) != (point.x as usize, point.y as usize, point.z as usize) {
+                if *b && (x, y, z) != (point.x as u8, point.y as u8, point.z as u8) {
                     TraversalAction::Stop
                 } else {
                     TraversalAction::Continue
