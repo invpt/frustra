@@ -4,7 +4,8 @@ use nalgebra::Matrix4;
 use vulkano::{
     buffer::{BufferContents, Subbuffer},
     command_buffer::{
-        allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo
+        allocator::StandardCommandBufferAllocator, AutoCommandBufferBuilder, CommandBufferUsage,
+        RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo,
     },
     descriptor_set::{
         layout::{
@@ -453,15 +454,16 @@ impl Renderer {
                 .expect("failed to recreate swapchain");
 
             self.swapchain = new_swapchain;
-            let (new_pipeline, new_crosshair_pipeline, new_framebuffers) = Self::window_size_dependent_setup(
-                self.memory_allocator.clone(),
-                self.vs.clone(),
-                self.fs.clone(),
-                self.crosshair_vs.clone(),
-                self.crosshair_fs.clone(),
-                &new_images,
-                self.render_pass.clone(),
-            );
+            let (new_pipeline, new_crosshair_pipeline, new_framebuffers) =
+                Self::window_size_dependent_setup(
+                    self.memory_allocator.clone(),
+                    self.vs.clone(),
+                    self.fs.clone(),
+                    self.crosshair_vs.clone(),
+                    self.crosshair_fs.clone(),
+                    &new_images,
+                    self.render_pass.clone(),
+                );
             self.pipeline = new_pipeline;
             self.crosshair_pipeline = new_crosshair_pipeline;
             self.framebuffers = new_framebuffers;
@@ -545,19 +547,27 @@ impl Renderer {
             .unwrap()
             .draw(self.face_buffer.len() as u32 * 6, 1, 0, 0)
             .unwrap()
-            .next_subpass(SubpassEndInfo::default(), SubpassBeginInfo {
-                contents: SubpassContents::Inline,
-                ..Default::default()
-            })
+            .next_subpass(
+                SubpassEndInfo::default(),
+                SubpassBeginInfo {
+                    contents: SubpassContents::Inline,
+                    ..Default::default()
+                },
+            )
             .unwrap()
             .bind_pipeline_graphics(self.crosshair_pipeline.clone())
             .unwrap()
             .push_constants(
-                self.pipeline.layout().clone(),
+                self.crosshair_pipeline.layout().clone(),
                 0,
                 UniformBufferContents {
                     projection_matrix: [
-                        [image_extent[1] as f32 / image_extent[0] as f32, 0.0, 0.0, 0.0],
+                        [
+                            image_extent[1] as f32 / image_extent[0] as f32,
+                            0.0,
+                            0.0,
+                            0.0,
+                        ],
                         [0.0, 1.0, 0.0, 0.0],
                         [0.0, 0.0, 1.0, 0.0],
                         [0.0, 0.0, 0.0, 1.0],
@@ -618,7 +628,11 @@ impl Renderer {
         crosshair_fs: EntryPoint,
         images: &[Arc<Image>],
         render_pass: Arc<RenderPass>,
-    ) -> (Arc<GraphicsPipeline>, Arc<GraphicsPipeline>, Vec<Arc<Framebuffer>>) {
+    ) -> (
+        Arc<GraphicsPipeline>,
+        Arc<GraphicsPipeline>,
+        Vec<Arc<Framebuffer>>,
+    ) {
         let device = memory_allocator.device().clone();
         let extent = images[0].extent();
 
@@ -732,8 +746,18 @@ impl Renderer {
                 PipelineShaderStageCreateInfo::new(crosshair_vs),
                 PipelineShaderStageCreateInfo::new(crosshair_fs),
             ];
-            let crosshair_layout =
-                PipelineLayout::new(device.clone(), PipelineLayoutCreateInfo::default()).unwrap();
+            let crosshair_layout = PipelineLayout::new(
+                device.clone(),
+                PipelineLayoutCreateInfo {
+                    push_constant_ranges: vec![PushConstantRange {
+                        stages: ShaderStages::VERTEX,
+                        offset: 0,
+                        size: size_of::<UniformBufferContents>() as u32,
+                    }],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
             let crosshair_subpass = Subpass::from(render_pass, 1).unwrap();
             let crosshair_pipeline = GraphicsPipeline::new(
                 device,
