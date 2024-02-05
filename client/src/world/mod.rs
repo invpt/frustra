@@ -107,9 +107,9 @@ impl Object<bool> {
             dir,
             Vector3::new(0.0, 0.0, 0.0),
             Vector3::new(
-                self.size.x as f32 - 1.0,
-                self.size.y as f32 - 1.0,
-                self.size.z as f32 - 1.0,
+                self.size.x as f32 - 0.01,
+                self.size.y as f32 - 0.01,
+                self.size.z as f32 - 0.01,
             ),
         ) else {
             return None;
