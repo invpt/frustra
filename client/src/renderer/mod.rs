@@ -29,7 +29,7 @@ use vulkano::{
             depth_stencil::{DepthState, DepthStencilState},
             input_assembly::{InputAssemblyState, PrimitiveTopology},
             multisample::MultisampleState,
-            rasterization::{CullMode, FrontFace, PolygonMode, RasterizationState},
+            rasterization::{CullMode, FrontFace, RasterizationState},
             vertex_input::VertexInputState,
             viewport::{Viewport, ViewportState},
             GraphicsPipelineCreateInfo,
@@ -41,7 +41,8 @@ use vulkano::{
     render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass},
     shader::{EntryPoint, ShaderStages},
     swapchain::{
-        acquire_next_image, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo,
+        acquire_next_image, ColorSpace, Surface, Swapchain, SwapchainCreateInfo,
+        SwapchainPresentInfo,
     },
     sync::{self, GpuFuture},
     Validated, VulkanError, VulkanLibrary,
@@ -246,19 +247,43 @@ impl Renderer {
                 .unwrap();
 
             // Choosing the internal format that the images will have.
-            let image_formats = device
+            let (image_format, color_space) = device
                 .physical_device()
                 .surface_formats(&surface, Default::default())
-                .unwrap();
-            let mut image_format = image_formats[0].0;
-            dbg!(&image_formats);
-            for (other_format, _color_space) in image_formats {
-                if other_format == Format::A2R10G10B10_UNORM_PACK32 {
-                    image_format = other_format;
-                }
-            }
+                .unwrap()
+                .into_iter()
+                .max_by(|(a_fmt, a_spc), (b_fmt, b_spc)| {
+                    fn is_srgb(fmt: &ColorSpace) -> bool {
+                        fmt == &ColorSpace::SrgbNonLinear
+                            || fmt == &ColorSpace::ExtendedSrgbNonLinear
+                    }
 
-            println!("Using image format {image_format:?}");
+                    fn has_alpha(fmt: &Format) -> bool {
+                        fmt.components()[3] >= 2
+                    }
+
+                    fn goldilocks_precision(fmt: &Format) -> bool {
+                        fmt.components()[..3].iter().all(|c| (8..=10).contains(c))
+                    }
+
+                    fn sum_precision(fmt: &Format) -> u16 {
+                        fmt.components()[..3].iter().map(|c| *c as u16).sum::<u16>()
+                    }
+
+                    // we want srgb
+                    (is_srgb(a_spc).cmp(&is_srgb(b_spc)))
+                        // we also want some alpha
+                        .then(has_alpha(a_fmt).cmp(&has_alpha(b_fmt)))
+                        // we don't want too many bits of precision
+                        .then(goldilocks_precision(a_fmt).cmp(&goldilocks_precision(b_fmt)))
+                        // but after goldilocks, prefer more precision
+                        .then(sum_precision(a_fmt).cmp(&sum_precision(b_fmt)))
+                        // finally, take more alpha if we can get it
+                        .then(a_fmt.components()[3].cmp(&b_fmt.components()[3]))
+                })
+                .unwrap();
+
+            println!("Using image format {image_format:?} and color space {color_space:?}");
 
             Swapchain::new(
                 device.clone(),
